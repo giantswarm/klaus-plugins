@@ -1,0 +1,223 @@
+name: Version Bump
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  bump-version:
+    # Only run on PR comments that start with /bump
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/bump')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check user permission
+        id: permission
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+
+            const hasWriteAccess = ['admin', 'write'].includes(permission.permission);
+            console.log(`User ${context.actor} has permission: ${permission.permission}`);
+
+            if (!hasWriteAccess) {
+              core.setFailed(`User ${context.actor} does not have write access`);
+              return;
+            }
+
+            return hasWriteAccess;
+
+      - name: Add eyes reaction
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_ref', pr.base.ref);
+
+            return pr;
+
+      - name: Parse bump command
+        id: parse
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const comment = context.payload.comment.body.trim();
+            const lines = comment.split('\n');
+            const commandLine = lines[0].trim();
+
+            // Parse: /bump <plugin> [level] or /bump all [level]
+            const match = commandLine.match(/^\/bump\s+(\S+)(?:\s+(patch|minor|major))?$/);
+
+            if (!match) {
+              core.setFailed(`Invalid command format: "${commandLine}". Use: /bump <plugin> [patch|minor|major] or /bump all`);
+              return;
+            }
+
+            const target = match[1];
+            const level = match[2] || 'minor';
+
+            console.log(`Target: ${target}, Level: ${level}`);
+
+            core.setOutput('target', target);
+            core.setOutput('level', level);
+
+      - name: Checkout PR branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+          persist-credentials: true  # Required for git push
+
+      - name: Setup Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: '24'
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ steps.pr.outputs.base_ref }}
+
+      - name: Run version bump
+        id: bump
+        run: |
+          TARGET="${{ steps.parse.outputs.target }}"
+          LEVEL="${{ steps.parse.outputs.level }}"
+          BASE="origin/${{ steps.pr.outputs.base_ref }}"
+
+          if [ "$TARGET" = "all" ]; then
+            RESULT=$(node shared/scripts/check-version-bump.js --bump-all --level "$LEVEL" --base "$BASE" --json)
+          else
+            RESULT=$(node shared/scripts/check-version-bump.js --bump "$TARGET" "$LEVEL" --json)
+          fi
+
+          echo "result<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Check if anything was bumped
+          if echo "$RESULT" | jq -e 'if type == "array" then length > 0 else .success end' > /dev/null; then
+            echo "bumped=true" >> $GITHUB_OUTPUT
+          else
+            echo "bumped=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push
+        if: steps.bump.outputs.bumped == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TARGET="${{ steps.parse.outputs.target }}"
+          LEVEL="${{ steps.parse.outputs.level }}"
+
+          # Create commit message
+          if [ "$TARGET" = "all" ]; then
+            MSG="chore: bump plugin versions ($LEVEL)"
+          else
+            # Get the new version from the result
+            NEW_VERSION=$(echo '${{ steps.bump.outputs.result }}' | jq -r '.newVersion // empty')
+            if [ -n "$NEW_VERSION" ]; then
+              MSG="chore: bump $TARGET to $NEW_VERSION"
+            else
+              MSG="chore: bump $TARGET ($LEVEL)"
+            fi
+          fi
+
+          git add .claude-plugin/marketplace.json
+          git commit -m "$MSG"
+          git push
+
+      - name: Add success reaction and reply
+        if: steps.bump.outputs.bumped == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const result = ${{ steps.bump.outputs.result }};
+
+            // Add checkmark reaction
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: '+1',
+            });
+
+            // Build reply message
+            let reply = '✅ Version bump applied!\n\n';
+
+            if (Array.isArray(result)) {
+              // Multiple plugins bumped
+              for (const r of result) {
+                reply += `- **${r.plugin}**: ${r.oldVersion} → ${r.newVersion}\n`;
+              }
+            } else if (result.success) {
+              // Single plugin bumped
+              reply += `- **${result.plugin}**: ${result.oldVersion} → ${result.newVersion}\n`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: reply,
+            });
+
+      - name: Handle no changes
+        if: steps.bump.outputs.bumped == 'false'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const target = '${{ steps.parse.outputs.target }}';
+            const result = ${{ steps.bump.outputs.result }};
+
+            // Add confused reaction
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'confused',
+            });
+
+            let reply;
+            if (target === 'all') {
+              reply = '🤔 No plugins needed version bumps.';
+            } else if (result.error) {
+              reply = `❌ ${result.error}`;
+            } else {
+              reply = `🤔 Could not bump version for **${target}**.`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: reply,
+            });

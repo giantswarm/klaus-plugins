@@ -1,0 +1,51 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+      with:
+        node-version: '24'
+
+    - name: Run tests
+      run: |
+        npm test
+
+    - name: Check for markdown issues
+      run: |
+        echo "Checking markdown files..."
+        # Find all .md files in commands directories
+        find plugins/*/commands -name "*.md" -type f | while read -r file; do
+          echo "Checking $file..."
+
+          # Check if file has frontmatter
+          if ! head -n 1 "$file" | grep -q "^---$"; then
+            echo "⚠️  Warning: $file may be missing frontmatter"
+          fi
+
+          # Check if file is not empty
+          if [ ! -s "$file" ]; then
+            echo "❌ Error: $file is empty"
+            exit 1
+          fi
+        done
+        echo "✅ Markdown checks passed"

@@ -1,0 +1,40 @@
+name: Validate JSON
+
+on:
+  pull_request:
+    paths: [ '**/*.json' ]
+
+permissions: {}
+
+jobs:
+  validate-json:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+
+    - name: Validate JSON files
+      run: |
+        errors=0
+        while IFS= read -r file; do
+          if jq empty "$file" 2>/dev/null; then
+            echo "✅ $file"
+          else
+            echo "❌ $file - Invalid JSON:"
+            jq empty "$file" 2>&1 || true
+            errors=$((errors + 1))
+          fi
+        done < <(find . -name '*.json' -not -path './.git/*' | sort)
+
+        echo ""
+        if [ "$errors" -gt 0 ]; then
+          echo "❌ Found $errors invalid JSON file(s)"
+          exit 1
+        fi
+
+        echo "✅ All JSON files are valid"

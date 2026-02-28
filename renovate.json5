@@ -1,0 +1,21 @@
+{
+  "extends": [
+    // Base config - https://github.com/giantswarm/renovate-presets/blob/main/default.json5
+    "github>giantswarm/renovate-presets:default.json5",
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": [
+        "^\\.circleci/generate-config\\.sh$",
+        "^\\.github/workflows/validate-plugins\\.yaml$"
+      ],
+      "matchStrings": [
+        "KLAUSCTL_VERSION:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "depNameTemplate": "giantswarm/klausctl",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ]
+}

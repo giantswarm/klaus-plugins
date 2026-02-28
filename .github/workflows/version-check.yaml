@@ -1,0 +1,114 @@
+name: Version Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0  # Need full history for git diff
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: '24'
+
+      - name: Check for version bumps needed
+        id: check
+        run: |
+          # Fetch the base branch
+          git fetch origin ${{ github.base_ref }}
+
+          # Run the check script
+          RESULT=$(node shared/scripts/check-version-bump.js --check --base origin/${{ github.base_ref }} --json)
+
+          # Store result for later steps
+          echo "result<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Check if there are any plugins needing bumps
+          COUNT=$(echo "$RESULT" | jq 'length')
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: Create or update PR comment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const result = ${{ steps.check.outputs.result }};
+            const count = ${{ steps.check.outputs.count }};
+
+            const commentMarker = '<!-- version-check-bot -->';
+
+            // Build the comment body
+            let body = commentMarker + '\n';
+
+            if (count === 0) {
+              body += 'No plugin version bumps needed for this PR.\n';
+            } else {
+              body += '## 🔖 Plugin Version Check\n\n';
+              body += 'The following plugins have changes that may need a version bump:\n\n';
+              body += '| Plugin | Current | Suggested | Changed Files |\n';
+              body += '|--------|---------|-----------|---------------|\n';
+
+              for (const r of result) {
+                const files = r.changedFiles.map(f => `\`${f.split('/').pop()}\``).join(', ');
+                body += `| ${r.plugin} | ${r.currentVersion} | **${r.suggestedVersion}** | ${files} |\n`;
+              }
+
+              body += '\n**Quick fix:** Comment one of the following to bump versions:\n\n';
+
+              for (const r of result) {
+                body += `- \`/bump ${r.plugin}\` - bump to ${r.suggestedVersion} (minor)\n`;
+                body += `- \`/bump ${r.plugin} patch\` - patch bump (typo fixes only)\n`;
+              }
+
+              if (count > 1) {
+                body += `- \`/bump all\` - bump all plugins listed above\n`;
+              }
+
+              body += '\n---\n';
+              body += '<sub>ℹ️ Version bumps ensure Claude Code users receive your updates. ';
+              body += 'Non-trivial changes → minor bump • Typo fixes → patch bump</sub>\n';
+            }
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(c => c.body.includes(commentMarker));
+
+            if (existingComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: body,
+              });
+              console.log('Updated existing comment');
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+              console.log('Created new comment');
+            }

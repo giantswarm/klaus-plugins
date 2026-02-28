@@ -1,0 +1,93 @@
+name: Auto Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: auto-release-main
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    name: Auto Release
+    if: github.event.pull_request.merged
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        env:
+          GIT_ACTOR: ${{ github.actor }}
+        run: |
+          git config user.name "$GIT_ACTOR"
+          git config user.email "${GIT_ACTOR}@users.noreply.github.com"
+
+      - name: Create per-plugin release tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          CURRENT=$(cat .claude-plugin/marketplace.json)
+          PREVIOUS=$(git show "${BASE_SHA}:.claude-plugin/marketplace.json" 2>/dev/null || echo '{"plugins":[]}')
+
+          PLUGINS=$(echo "$CURRENT" | jq -r '.plugins[].name')
+
+          released=0
+
+          for plugin in $PLUGINS; do
+            current_version=$(echo "$CURRENT" | jq -r --arg p "$plugin" \
+              '.plugins[] | select(.name==$p) | .version')
+            previous_version=$(echo "$PREVIOUS" | jq -r --arg p "$plugin" \
+              '.plugins[] | select(.name==$p) | .version // "0.0.0"')
+
+            if [[ -z "$current_version" || "$current_version" == "null" ]]; then
+              echo "WARNING: No version for ${plugin}, skipping."
+              continue
+            fi
+
+            if [[ "$current_version" == "$previous_version" ]]; then
+              continue
+            fi
+
+            tag="${plugin}/v${current_version}"
+            echo "Plugin ${plugin}: ${previous_version} -> ${current_version}"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "  Release ${tag} already exists, skipping."
+              continue
+            fi
+
+            git tag -f "$tag"
+            if git push origin "$tag" --force; then
+              echo "  Created tag: ${tag}"
+
+              gh release create "$tag" \
+                --title "${plugin} v${current_version}" \
+                --notes "Release of **${plugin}** v${current_version} (previously ${previous_version})." \
+                --verify-tag
+
+              released=$((released + 1))
+            else
+              echo "  Failed to push tag: ${tag}"
+              git tag -d "$tag" >/dev/null 2>&1 || true
+            fi
+          done
+
+          if [[ "$released" -eq 0 ]]; then
+            echo "No plugin versions changed, no releases created."
+          else
+            echo "Created ${released} release(s)."
+          fi

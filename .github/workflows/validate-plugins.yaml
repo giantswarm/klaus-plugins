@@ -1,0 +1,77 @@
+name: Validate Plugins
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  KLAUSCTL_VERSION: "0.0.28"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+      with:
+        node-version: '24'
+
+    - name: Install klausctl
+      run: |
+        curl -fsSL -o /tmp/klausctl.tar.gz \
+          "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl_Linux_x86_64.tar.gz"
+        tar -xzf /tmp/klausctl.tar.gz -C /tmp --strip-components=1 klausctl_Linux_x86_64/klausctl
+        install -D /tmp/klausctl "${HOME}/bin/klausctl"
+        echo "${HOME}/bin" >> "${GITHUB_PATH}"
+
+    - name: Validate plugin.json schemas
+      run: |
+        echo "Validating plugin.json files..."
+        node shared/scripts/validate-schema.js
+
+    - name: Check for command conflicts
+      run: |
+        echo "Checking for command name conflicts..."
+        node shared/scripts/check-conflicts.js
+
+    - name: Validate plugins
+      run: |
+        failed=0
+        for dir in plugins/*/; do
+          name=$(basename "$dir")
+          if klausctl plugin validate "$dir"; then
+            echo "  ${name}: ok"
+          else
+            echo "  ${name}: FAILED"
+            failed=1
+          fi
+        done
+        exit $failed
+
+    - name: Dry-run push
+      run: |
+        failed=0
+        for dir in plugins/*/; do
+          name=$(basename "$dir")
+          ref="gsoci.azurecr.io/giantswarm/klaus-plugins/${name}:dry-run"
+          if klausctl plugin push --dry-run "$dir" "$ref"; then
+            echo "  ${name}: ok"
+          else
+            echo "  ${name}: FAILED"
+            failed=1
+          fi
+        done
+        exit $failed
