@@ -91,3 +91,72 @@ jobs:
           else
             echo "Created ${released} release(s)."
           fi
+
+      - name: Notify downstream repos
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::DOWNSTREAM_DISPATCH_TOKEN not set" \
+              "- skipping downstream notification"
+            exit 0
+          fi
+
+          CURRENT=$(cat .claude-plugin/marketplace.json)
+          PREVIOUS=$(git show "${BASE_SHA}:.claude-plugin/marketplace.json" 2>/dev/null || echo '{"plugins":[]}')
+          PLUGINS=$(echo "$CURRENT" | jq -r '.plugins[].name')
+
+          FAILED=0
+          DISPATCHED=0
+
+          for plugin in $PLUGINS; do
+            current_version=$(echo "$CURRENT" | jq -r --arg p "$plugin" \
+              '.plugins[] | select(.name==$p) | .version')
+            previous_version=$(echo "$PREVIOUS" | jq -r --arg p "$plugin" \
+              '.plugins[] | select(.name==$p) | .version // "0.0.0"')
+
+            if [[ -z "$current_version" || "$current_version" == "null" ]]; then
+              continue
+            fi
+
+            if [[ "$current_version" == "$previous_version" ]]; then
+              continue
+            fi
+
+            # Validate plugin name (alphanumeric, hyphens, underscores only)
+            if ! [[ "$plugin" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+              echo "::warning::Invalid plugin name: ${plugin}, skipping dispatch"
+              continue
+            fi
+
+            # Validate semver format
+            if ! [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+              echo "::warning::Invalid semver for ${plugin}: ${current_version}, skipping dispatch"
+              continue
+            fi
+
+            echo "Dispatching plugin-release for ${plugin} v${current_version}"
+            if gh api \
+              --method POST \
+              "/repos/giantswarm/klaus-personalities/dispatches" \
+              -f "event_type=plugin-release" \
+              -f "client_payload[plugin]=${plugin}" \
+              -f "client_payload[version]=${current_version}"; then
+              echo "  -> Notified klaus-personalities"
+              DISPATCHED=$((DISPATCHED + 1))
+            else
+              echo "::warning::Failed to notify klaus-personalities for ${plugin}" >&2
+              FAILED=1
+            fi
+          done
+
+          if [[ "$DISPATCHED" -eq 0 ]]; then
+            echo "No plugins dispatched."
+          else
+            echo "Dispatched ${DISPATCHED} notification(s)."
+          fi
+          exit $FAILED
