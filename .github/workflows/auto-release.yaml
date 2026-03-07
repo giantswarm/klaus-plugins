@@ -46,6 +46,7 @@ jobs:
           PLUGINS=$(echo "$CURRENT" | jq -r '.plugins[].name')
 
           released=0
+          tag_failed=0
 
           for plugin in $PLUGINS; do
             current_version=$(echo "$CURRENT" | jq -r --arg p "$plugin" \
@@ -59,6 +60,18 @@ jobs:
             fi
 
             if [[ "$current_version" == "$previous_version" ]]; then
+              continue
+            fi
+
+            # Validate plugin name (alphanumeric, hyphens, underscores only)
+            if ! [[ "$plugin" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+              echo "::warning::Invalid plugin name: ${plugin}, skipping release"
+              continue
+            fi
+
+            # Validate semver format
+            if ! [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+              echo "::warning::Invalid semver for ${plugin}: ${current_version}, skipping release"
               continue
             fi
 
@@ -81,8 +94,9 @@ jobs:
 
               released=$((released + 1))
             else
-              echo "  Failed to push tag: ${tag}"
+              echo "::warning::Failed to push tag: ${tag}"
               git tag -d "$tag" >/dev/null 2>&1 || true
+              tag_failed=1
             fi
           done
 
@@ -91,9 +105,10 @@ jobs:
           else
             echo "Created ${released} release(s)."
           fi
+          exit $tag_failed
 
       - name: Notify downstream repos
-        continue-on-error: true
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -144,12 +159,12 @@ jobs:
               --method POST \
               "/repos/giantswarm/klaus-personalities/dispatches" \
               -f "event_type=plugin-release" \
-              -f "client_payload[plugin]=${plugin}" \
+              -f "client_payload[component]=${plugin}" \
               -f "client_payload[version]=${current_version}"; then
               echo "  -> Notified klaus-personalities"
               DISPATCHED=$((DISPATCHED + 1))
             else
-              echo "::warning::Failed to notify klaus-personalities for ${plugin}" >&2
+              echo "::warning::Failed to notify klaus-personalities for ${plugin}"
               FAILED=1
             fi
           done
