@@ -10,7 +10,7 @@ on:
 permissions: {}
 
 env:
-  KLAUSCTL_VERSION: "0.0.96"
+  KLAUSCTL_VERSION: "0.1.2"
 
 jobs:
   validate:
@@ -31,9 +31,8 @@ jobs:
 
     - name: Install klausctl
       run: |
-        curl -fsSL -o /tmp/klausctl.tar.gz \
-          "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl_Linux_x86_64.tar.gz"
-        tar -xzf /tmp/klausctl.tar.gz -C /tmp --strip-components=1 klausctl_Linux_x86_64/klausctl
+        curl -fsSL -o /tmp/klausctl \
+          "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl-linux-amd64"
         install -D /tmp/klausctl "${HOME}/bin/klausctl"
         echo "${HOME}/bin" >> "${GITHUB_PATH}"
 
