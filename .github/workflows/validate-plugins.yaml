@@ -10,7 +10,7 @@ on:
 permissions: {}
 
 env:
-  KLAUSCTL_VERSION: "0.2.7"
+  KLAUSCTL_VERSION: "0.2.8"
 
 jobs:
   validate:
