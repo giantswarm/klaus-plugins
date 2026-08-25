@@ -32,11 +32,10 @@ jobs:
             # --retry-all-errors covers exactly this but is not in the executor
             # image's curl, hence the explicit loop.
             for i in $(seq 1 10); do
-              curl -fsSL -o /tmp/klausctl.tar.gz "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl_Linux_x86_64.tar.gz" && break
+              curl -fsSL -o /tmp/klausctl "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl-linux-amd64" && break
               [ "$i" -eq 10 ] && exit 1
               sleep 15
             done
-            tar -xzf /tmp/klausctl.tar.gz -C /tmp --strip-components=1 klausctl_Linux_x86_64/klausctl
             mkdir -p "${HOME}/bin"
             install /tmp/klausctl "${HOME}/bin/klausctl"
             echo 'export PATH="${HOME}/bin:${PATH}"' >> "${BASH_ENV}"
