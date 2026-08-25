@@ -26,7 +26,7 @@ jobs:
           name: Install klausctl
           command: |
             set -euo pipefail
-            curl -fsSL -o /tmp/klausctl.tar.gz \
+            curl -fsSL --retry 10 --retry-delay 15 --retry-all-errors -o /tmp/klausctl.tar.gz \
               "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl_Linux_x86_64.tar.gz"
             tar -xzf /tmp/klausctl.tar.gz -C /tmp --strip-components=1 klausctl_Linux_x86_64/klausctl
             mkdir -p "${HOME}/bin"
