@@ -26,8 +26,16 @@ jobs:
           name: Install klausctl
           command: |
             set -euo pipefail
-            curl -fsSL --retry 10 --retry-delay 15 --retry-all-errors -o /tmp/klausctl.tar.gz \
-              "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl_Linux_x86_64.tar.gz"
+            # Renovate opens the version-bump PR as soon as the release TAG appears,
+            # which can be up to a minute before goreleaser finishes uploading the
+            # release ASSETS, so a first attempt can legitimately 404. curl's own
+            # --retry-all-errors covers exactly this but is not in the executor
+            # image's curl, hence the explicit loop.
+            for i in $(seq 1 10); do
+              curl -fsSL -o /tmp/klausctl.tar.gz "https://github.com/giantswarm/klausctl/releases/download/v${KLAUSCTL_VERSION}/klausctl_Linux_x86_64.tar.gz" && break
+              [ "$i" -eq 10 ] && exit 1
+              sleep 15
+            done
             tar -xzf /tmp/klausctl.tar.gz -C /tmp --strip-components=1 klausctl_Linux_x86_64/klausctl
             mkdir -p "${HOME}/bin"
             install /tmp/klausctl "${HOME}/bin/klausctl"
