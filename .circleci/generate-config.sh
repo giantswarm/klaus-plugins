@@ -19,7 +19,7 @@ jobs:
     environment:
       REGISTRY: gsoci.azurecr.io
       REGISTRY_PATH: giantswarm/klaus-plugins
-      KLAUSCTL_VERSION: "0.4.4"
+      KLAUSCTL_VERSION: "0.4.5"
     steps:
       - checkout
       - run:
